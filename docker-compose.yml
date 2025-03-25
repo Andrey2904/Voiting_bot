@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: go-poll-bot
+    networks:
+      - app-net
+    ports:
+      - "8080:8080"
+
+  mattermost:
+    image: mattermost/mattermost-preview
+    container_name: mattermost-dev
+    networks:
+      - app-net
+    ports:
+      - "8065:8065"
+
+networks:
+  app-net:
+    driver: bridge

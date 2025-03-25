@@ -1,0 +1,16 @@
+poll-bot
+*.exe
+*.out
+*.test
+
+
+.vscode/
+.idea/
+
+*.log
+
+.DS_Store
+Thumbs.db
+
+.env
+docker-compose.override.yml
