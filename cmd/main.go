@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,7 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	tarantool "github.com/tarantool/go-tarantool/v2"
 )
+
+var tnt *tarantool.Connection
 
 type Poll struct {
 	ID       string
@@ -22,10 +27,29 @@ type Poll struct {
 var polls = make(map[string]*Poll)
 
 func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	dialer := tarantool.NetDialer{
+		Address:  "tarantool-db:3301",
+		User:     "admin",
+		Password: "password",
+	}
+	opts := tarantool.Opts{
+		Timeout: 1 * time.Second,
+	}
+	conn, err := tarantool.Connect(ctx, dialer, opts)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к Tarantool: %v", err)
+	}
+
+	tnt = conn
+	log.Println("✅ Подключение к Tarantool установлено")
+
+	// теперь запускаем сервер
 	http.HandleFunc("/command", handleCommand)
 
 	log.Println("Бот слушает на :8080")
-	err := http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)
 	}
@@ -119,13 +143,31 @@ func handleCreatePoll(w http.ResponseWriter, text, user string) {
 		options = append(options, strings.TrimSpace(opt))
 	}
 	pollID := fmt.Sprintf("poll-%d", time.Now().UnixNano())
-	polls[pollID] = &Poll{
+	poll := &Poll{
 		ID:       pollID,
 		Question: question,
 		Optinal:  options,
 		Votes:    make(map[string]int),
 		Author:   user,
+		Closed:   false,
 	}
+
+	polls[pollID] = poll
+
+	_, err := tnt.Insert("polls", []interface{}{
+		poll.ID,
+		poll.Question,
+		poll.Optinal,
+		poll.Author,
+		poll.Closed,
+	})
+
+	if err != nil {
+		log.Println("Ошибка сохранения опроса в Tarantool:", err)
+	} else {
+		log.Println("✅ Опрос сохранён в Tarantool:", poll.ID)
+	}
+
 	msg := fmt.Sprintf("Создан опрос *%s* (ID: `%s`):\n", question, pollID)
 	for i, opt := range options {
 		msg += fmt.Sprintf("%d. %s\n", i+1, opt)
@@ -146,6 +188,7 @@ func respond(w http.ResponseWriter, text string) {
 func handleVote(w http.ResponseWriter, text, user string) {
 
 	parts := strings.Fields(text)
+
 	if len(parts) != 2 {
 		respond(w, "Неправильный формат. Пример: `/poll vote poll-123456789 2`")
 		return
@@ -182,4 +225,36 @@ func handleVote(w http.ResponseWriter, text, user string) {
 
 	respond(w, fmt.Sprintf("✅ %s, ты проголосовал за *%s* в опросе *%s*.",
 		user, poll.Optinal[optionNum-1], poll.Question))
+}
+
+func LoadPoll(pollID string) (*Poll, error) {
+	req := tarantool.NewSelectRequest("polls").
+		Index("primary").
+		Limit(1).
+		Iterator(tarantool.IterEq).
+		Key([]interface{}{pollID})
+
+	// Выполняем запрос
+	resp, err := tnt.Do(req).Get()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при запросе к Tarantool: %v", err)
+	}
+	if len(resp) == 0 {
+		return nil, fmt.Errorf("опрос с ID %s не найден", pollID)
+	}
+	t := resp[0].([]interface{})
+	optionsRaw := t[2].([]interface{})
+	options := make([]string, len(optionsRaw))
+	for i, v := range optionsRaw {
+		options[i] = v.(string)
+	}
+	poll := &Poll{
+		ID:       t[0].(string),
+		Question: t[1].(string),
+		Optinal:  options,
+		Author:   t[3].(string),
+		Closed:   t[4].(bool),
+		Votes:    make(map[string]int),
+	}
+	return poll, nil
 }

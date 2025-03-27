@@ -8,6 +8,8 @@ services:
       - app-net
     ports:
       - "8080:8080"
+    depends_on:
+      - tarantool
 
   mattermost:
     image: mattermost/mattermost-preview
@@ -17,6 +19,23 @@ services:
     ports:
       - "8065:8065"
 
+
+  tarantool:
+    image: tarantool/tarantool:2.11
+    container_name: tarantool-db
+    ports:
+      - "3301:3301"
+    networks:
+      - app-net
+    environment:
+      TARANTOOL_USER_NAME : admin
+      TARANTOOL_USER_PASSWORD : password
+    volumes:
+      - tarantool_data:/var/lib/tarantool
+
 networks:
   app-net:
     driver: bridge
+
+volumes:
+  tarantool_data:
